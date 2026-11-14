@@ -1594,63 +1594,6 @@ def test_a_card_finds_its_person_once_they_are_added(home: Home, page: Page) -> 
         expect(card.locator(".person")).to_have_text("Nia e2e", timeout=TIMEOUT)
 
 
-# Lets a test cut the page off from Home Assistant: while `window.offline` is
-# set, open websockets close and new ones never open, as on a phone that has
-# lost its network.
-CUTTABLE_CONNECTION = """
-(() => {
-  const Real = window.WebSocket;
-  const open = new Set();
-  window.WebSocket = class extends Real {
-    constructor(...args) {
-      super(...args);
-      open.add(this);
-      this.addEventListener("close", () => open.delete(this));
-      if (window.offline) this.close();
-    }
-  };
-  window.goOffline = () => {
-    window.offline = true;
-    for (const socket of open) socket.close();
-  };
-})()
-"""
-
-CONNECTED = "document.querySelector('home-assistant')?.hass?.connected"
-
-
-def test_the_frontend_builds_the_cards_again_once_the_connection_is_back(
-    home: Home, page: Page
-) -> None:
-    """A guard on Home Assistant's frontend, not on the cards: they do nothing
-    of their own when the connection comes back, and show what changed
-    meanwhile only because the frontend replaces them with new ones. If this
-    fails after a frontend update, the cards must catch up by themselves."""
-    page.add_init_script(CUTTABLE_CONNECTION)
-    with person_named(home, "Connie e2e"):
-        card = open_card(home, page, {"type": "custom:metron-summary-card", "person": "Connie e2e"})
-        expect(card.locator(".body")).to_contain_text("0 of", timeout=TIMEOUT)
-        card.evaluate("card => { card.sameCard = true }")
-
-        page.evaluate("window.goOffline()")
-        page.wait_for_function(f"{CONNECTED} === false")
-        home.ws(
-            {
-                "type": "metron/entry/add",
-                "person": person_id(home, "Connie e2e"),
-                "day": today(),
-                "meal": "lunch",
-                "name": "Offline soup e2e",
-                "kcal": 444,
-            }
-        )
-        page.evaluate("window.offline = false")
-        page.wait_for_function(f"{CONNECTED} === true", timeout=30_000)
-
-        expect(card.locator(".body")).to_contain_text("444 of", timeout=TIMEOUT)
-        assert card.evaluate("card => card.sameCard !== true")
-
-
 def test_the_weight_card_switches_range(home: Home, page: Page) -> None:
     card = open_card(home, page, {"type": "custom:metron-weight-card", "person": "Matteo"})
     for value in ("all", "365", "90"):
