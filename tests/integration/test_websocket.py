@@ -256,12 +256,16 @@ async def test_subscribers_hear_that_the_people_may_have_changed(
     assert subscribed["success"]
 
     # Setting up, as after any change to a person, tells of each person, then
-    # that the people themselves may have changed.
+    # that the people themselves may have changed. A command sent afterwards
+    # is answered after them, so a missing event fails this, not hangs it.
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
-    events = [(await client.receive_json())["event"] for _ in range(3)]
+    await client.send_json_auto_id({"type": "metron/people"})
+    events = []
+    while (message := await client.receive_json())["type"] == "event":
+        events.append(message["event"])
     assert sorted(e["person"] for e in events[:2]) == ["debora", "matteo"]
-    assert events[2] == {"person": None, "days": [], "people": True}
+    assert events[2:] == [{"person": None, "days": [], "people": True}]
 
     # Unsubscribed, neither kind comes: the next message is a command's reply.
     await client.send_json_auto_id({"type": "unsubscribe_events", "subscription": subscribed["id"]})
