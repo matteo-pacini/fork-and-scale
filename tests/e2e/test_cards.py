@@ -507,6 +507,7 @@ def test_the_weight_card_s_log_form_follows_a_new_language(home: Home, page: Pag
         log = card.locator('[data-action="log"]')
         expect(log).to_have_text("Log weight", timeout=TIMEOUT)
         sensor = "sensor.lina_e2e_weight"
+        before = page.evaluate("document.querySelector('home-assistant').hass.language")
         try:
             # A language chosen in the profile reaches the card with no reload,
             # and the card draws in it on the next change to its person.
@@ -520,7 +521,8 @@ def test_the_weight_card_s_log_form_follows_a_new_language(home: Home, page: Pag
             # her while they still read it logs an error.
             wait_for(lambda: float(home.api("GET", f"/api/states/{sensor}")["state"]) == 69)
         finally:
-            page.evaluate(select, "en")
+            # The choice is saved for the user every later test logs in as.
+            page.evaluate(select, before)
 
 
 def test_a_weight_being_typed_stays_while_another_dashboard_tab_shows(
