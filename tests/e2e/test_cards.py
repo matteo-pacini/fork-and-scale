@@ -11,7 +11,7 @@ import pytest
 from playwright.sync_api import Locator, Page, expect
 
 from .conftest import FakeSearch, Home
-from .flows import goals_since, person_named, wait_for
+from .flows import goals_since, people, person_named, wait_for
 
 TIMEOUT = 15_000
 
@@ -1689,6 +1689,73 @@ def test_the_saved_foods_form_removes_portions_and_cancels(home: Home, page: Pag
     expect(card.locator('.foodform [data-portion="name"]')).to_have_value("Keep")
     card.locator('.panel [data-action="close"]').click()
     expect(card.locator(".panel")).to_be_hidden()
+
+
+def change_details(home: Home, person: str, **changes) -> None:
+    """Change `person`'s details through the person form, keeping the rest."""
+    [entry] = home.api("GET", "/api/config/config_entries/entry?domain=metron")
+    subentries = home.ws({"type": "config_entries/subentries/list", "entry_id": entry["entry_id"]})
+    subentry = next(x["subentry_id"] for x in subentries if x["title"] == person)
+    flows = "/api/config/config_entries/subentries/flow"
+    menu = home.api(
+        "POST", flows, {"handler": [entry["entry_id"], "person"], "subentry_id": subentry}
+    )
+    edit = home.api("POST", f"{flows}/{menu['flow_id']}", {"next_step_id": "edit"})
+    shown = {}
+    for field in edit["data_schema"]:
+        if "schema" in field:  # a section, such as active calories
+            shown[field["name"]] = {
+                f["name"]: f["description"]["suggested_value"]
+                for f in field["schema"]
+                if "description" in f
+            }
+        elif "description" in field:
+            shown[field["name"]] = field["description"]["suggested_value"]
+    done = home.api("POST", f"{flows}/{edit['flow_id']}", shown | changes)
+    assert done["reason"] == "reconfigure_successful", done
+    # The change reloads the integration, which answers again once it is back.
+    wait_for(
+        lambda: any(
+            p["name"] == changes.get("name", person)
+            and all(p.get(k, v) == v for k, v in changes.items())
+            for p in people(home)
+        )
+    )
+
+
+def test_an_open_card_follows_a_change_to_its_person(home: Home, page: Page) -> None:
+    with person_named(home, "Greta e2e"):
+        card = open_card(home, page, {"type": "custom:metron-weight-card", "person": "Greta e2e"})
+        expect(card.locator(".goallabel")).to_have_text("Goal 65 kg", timeout=TIMEOUT)
+
+        change_details(home, "Greta e2e", goal_weight_kg=60)
+
+        expect(card.locator(".goallabel")).to_have_text("Goal 60 kg", timeout=TIMEOUT)
+
+
+def test_an_open_card_loses_and_finds_the_person_its_config_names(home: Home, page: Page) -> None:
+    with person_named(home, "Rae e2e"):
+        card = open_card(home, page, {"type": "custom:metron-summary-card", "person": "Rae e2e"})
+        expect(card.locator(".person")).to_have_text("Rae e2e", timeout=TIMEOUT)
+
+        # Renamed, the person is no longer the one the card's config names:
+        # the open card says what it would say once the page is reloaded.
+        change_details(home, "Rae e2e", name="Raya e2e")
+        try:
+            expect(card).to_contain_text("No person named Rae e2e", timeout=TIMEOUT)
+        finally:
+            # Also when that fails: person_named removes them by this name.
+            change_details(home, "Raya e2e", name="Rae e2e")
+        expect(card.locator(".person")).to_have_text("Rae e2e", timeout=TIMEOUT)
+        expect(card.locator(".body")).to_contain_text("0 of", timeout=TIMEOUT)
+
+
+def test_a_card_finds_its_person_once_they_are_added(home: Home, page: Page) -> None:
+    card = open_card(home, page, {"type": "custom:metron-streak-card", "person": "Nia e2e"})
+    expect(card).to_contain_text("No person named Nia e2e", timeout=TIMEOUT)
+
+    with person_named(home, "Nia e2e"):
+        expect(card.locator(".person")).to_have_text("Nia e2e", timeout=TIMEOUT)
 
 
 def test_the_weight_card_switches_range(home: Home, page: Page) -> None:
